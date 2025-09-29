@@ -69,6 +69,9 @@ const BookingSchema = new mongoose.Schema({
     checkedInBy: { // Admin/Organizer who scanned the QR code
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    },
+    qrCodeData: { // Field to store the detailed QR code string
+        type: String,
     }
 });
 

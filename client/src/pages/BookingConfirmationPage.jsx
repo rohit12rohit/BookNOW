@@ -43,10 +43,9 @@ const BookingConfirmationPage = () => {
                         setBooking(null);
                     } else {
                         setBooking(data);
-                        // Only generate QR code value for confirmed or checked-in bookings
+                        // CORRECTED: Use the detailed qrCodeData field for the QR code value
                         if (data && (data.status === 'Confirmed' || data.status === 'CheckedIn')) {
-                            // The QR code should contain the secure reference ID for scanning.
-                            setQrCodeValue(data.bookingRefId || data._id);
+                            setQrCodeValue(data.qrCodeData || ''); // Use the JSON string from the backend
                         }
                     }
                 }
