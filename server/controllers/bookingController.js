@@ -106,7 +106,7 @@ exports.createBooking = async (req, res) => {
         }
 
         const bookingRefId = await generateUniqueBookingRefId(session);
-
+        
         const qrCodeDetails = {
             bookingRefId: bookingRefId,
             userName: user.name,
@@ -186,7 +186,9 @@ exports.getBookingById = async (req, res) => {
             ? { $or: [{ _id: bookingIdentifier }, { bookingRefId: bookingIdentifier.toUpperCase() }] }
             : { bookingRefId: bookingIdentifier.toUpperCase() };
         
+        // *** CRITICAL FIX: Added 'qrCodeData' to the select statement ***
         const booking = await Booking.findOne(query)
+             .select('+qrCodeData') // Explicitly select the qrCodeData field
              .populate({
                 path: 'showtime',
                 populate: [
@@ -324,22 +326,28 @@ exports.cancelPendingBooking = async (req, res) => {
  * @access Private (Admin or Organizer)
  */
 exports.validateBookingQR = async (req, res) => {
-    const { bookingRefId } = req.body;
+    const { qrCodeData } = req.body; // Expect the full QR data string
     const staffUserId = req.user.id;
-
-    if (!bookingRefId || typeof bookingRefId !== 'string') {
-        return res.status(400).json({ msg: 'Invalid Booking Reference ID format' });
-    }
     
+    let bookingDetails;
     try {
-        const booking = await Booking.findOne({ bookingRefId: bookingRefId.toUpperCase() })
-            .populate({ path: 'showtime', populate: [{ path: 'movie', select: 'title' }, { path: 'venue', select: 'organizer'}] })
-            .populate('user', 'name email');
+        bookingDetails = JSON.parse(qrCodeData);
+    } catch (e) {
+        return res.status(400).json({ msg: 'Invalid QR Code format.' });
+    }
+
+    if (!bookingDetails.bookingRefId) {
+        return res.status(400).json({ msg: 'QR Code is missing a booking reference ID.' });
+    }
+
+    try {
+        const booking = await Booking.findOne({ bookingRefId: bookingDetails.bookingRefId.toUpperCase() })
+            .populate({ path: 'showtime', populate: { path: 'venue', select: 'organizer' } });
 
         if (!booking) {
             return res.status(404).json({ msg: 'Booking reference not found' });
         }
-
+        
         let isAuthorized = false;
         if (req.user.role === 'admin') {
             isAuthorized = true;
@@ -365,16 +373,12 @@ exports.validateBookingQR = async (req, res) => {
         booking.status = 'CheckedIn';
         await booking.save();
 
+        // Respond with the details from the QR code for confirmation on the scanner's screen
         res.status(200).json({
             success: true,
             message: 'Check-in Successful!',
             bookingDetails: {
-                bookingRefId: booking.bookingRefId,
-                userName: booking.user.name,
-                movieTitle: booking.showtime?.movie?.title || booking.showtime?.event?.title || 'N/A',
-                showtime: dayjs(booking.showtime.startTime).format('DD MMM, h:mm A'),
-                screenName: booking.showtime.screenName,
-                seats: booking.seats,
+                ...bookingDetails,
                 checkInTime: booking.checkInTime.toLocaleString('en-IN')
             }
         });

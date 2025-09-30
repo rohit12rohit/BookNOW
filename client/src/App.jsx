@@ -25,7 +25,7 @@ const MovieDetailsPage = lazy(() => import('./pages/MovieDetailsPage'));
 const EventDetailsPage = lazy(() => import('./pages/EventDetailsPage'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const BookingConfirmationPage = lazy(() => import('./pages/BookingConfirmationPage'));
-const MyBookingsPage = lazy(() => import('./pages/MyBookingsPage'));
+const UserDashboardPage = lazy(() => import('./pages/UserDashboardPage')); // NEW
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage'));
@@ -99,8 +99,8 @@ function App() {
 
               {/* --- Protected Routes (Require Basic Login) --- */}
               <Route
-                  path="/my-bookings"
-                  element={ <ProtectedRoute> <MyBookingsPage /> </ProtectedRoute> }
+                  path="/dashboard"
+                  element={ <ProtectedRoute> <UserDashboardPage /> </ProtectedRoute> }
               />
               <Route
                   path="/booking-confirmation/:bookingId"

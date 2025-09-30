@@ -103,7 +103,7 @@ function Navbar() {
                                 </Typography>
                                 {user?.role === 'admin' && <Button color="inherit" component={RouterLink} to="/admin" size="small" sx={{minWidth: 'auto', px:1}}>Admin</Button>}
                                 {user?.role === 'organizer' && <Button color="inherit" component={RouterLink} to="/organizer" size="small" sx={{minWidth: 'auto', px:1}}>Organizer</Button>}
-                                <Button color="inherit" component={RouterLink} to="/my-bookings" size="small" sx={{minWidth: 'auto', px:1}}>My Bookings</Button>
+                                <Button color="inherit" component={RouterLink} to="/dashboard?tab=bookings" size="small" sx={{minWidth: 'auto', px:1}}>My Account</Button>
                                 <Button color="error" variant='outlined' size="small" onClick={handleLogout} sx={{minWidth: 'auto', px:1}}>Logout</Button>
                             </>
                         ) : (

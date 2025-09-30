@@ -20,7 +20,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'; // Icon for fai
 import { QRCodeSVG } from 'qrcode.react';
 
 const BookingConfirmationPage = () => {
-    const { bookingId } = useParams(); // This will be the bookingRefId
+    const { bookingId } = useParams(); // This will be the bookingRefId or mongo _id
     const { user, isLoading: isAuthLoading } = useAuth();
     const [booking, setBooking] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -43,7 +43,7 @@ const BookingConfirmationPage = () => {
                         setBooking(null);
                     } else {
                         setBooking(data);
-                        // CORRECTED: Use the detailed qrCodeData field for the QR code value
+                        // Use the detailed qrCodeData field for the QR code value
                         if (data && (data.status === 'Confirmed' || data.status === 'CheckedIn')) {
                             setQrCodeValue(data.qrCodeData || ''); // Use the JSON string from the backend
                         }
@@ -122,7 +122,7 @@ const BookingConfirmationPage = () => {
                          <Box sx={{ p: 1, bgcolor: 'white', border: '1px solid grey' }}>
                             <QRCodeSVG
                                 value={qrCodeValue}
-                                size={180}
+                                size={220} // Slightly larger for more data
                                 level={"H"}
                             />
                          </Box>
@@ -141,7 +141,7 @@ const BookingConfirmationPage = () => {
                 )}
 
                 <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2 }}>
-                    <Button component={RouterLink} to="/my-bookings" variant="contained" color="error"> View My Bookings </Button>
+                    <Button component={RouterLink} to="/dashboard?tab=bookings" variant="contained" color="error"> View My Bookings </Button>
                      <Button component={RouterLink} to="/" variant="outlined" color="error"> Back to Home </Button>
                 </Box>
             </Paper>

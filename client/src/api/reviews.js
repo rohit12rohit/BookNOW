@@ -85,3 +85,17 @@ export const reportReviewApi = async (reviewId, reason) => {
         throw error.response?.data || new Error('Failed to report review');
     }
 };
+
+/**
+ * Fetches reviews for the currently logged-in user.
+ * @returns {Promise<Array>} - An array of review objects.
+ */
+export const getMyReviewsApi = async () => {
+    try {
+        const response = await axios.get(`${REVIEW_API_URL}/me`);
+        return Array.isArray(response.data) ? response.data : [];
+    } catch (error) {
+        console.error('Get My Reviews API error:', error.response?.data || error.message);
+        throw error.response?.data || new Error('Failed to fetch your reviews');
+    }
+};
