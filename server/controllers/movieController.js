@@ -23,11 +23,11 @@ exports.checkReviewEligibility = async (req, res) => {
         }
 
         // 2. **FIXED LOGIC**: Check if the user has a 'Confirmed' or 'CheckedIn' booking for ANY showtime of this movie.
-        // The original logic incorrectly only checked for past showtimes by adding `startTime: { $lt: new Date() }`. That condition is now removed.
+        // The incorrect condition `startTime: { $lt: new Date() }` has been removed.
         const showtimeIds = await Showtime.find({ movie: movieId }).distinct('_id');
-
-        // If there are no showtimes at all for this movie, they can't have a booking.
+        
         if (showtimeIds.length === 0) {
+            // This case is unlikely if a booking exists, but it's a good safeguard.
             return res.status(200).json({ isEligible: false, reason: 'no_booking' });
         }
 
@@ -37,7 +37,6 @@ exports.checkReviewEligibility = async (req, res) => {
             status: { $in: ['Confirmed', 'CheckedIn'] }
         });
 
-        // If no confirmed booking is found for any of the movie's showtimes, the user is not eligible.
         if (!userBooking) {
             return res.status(200).json({ isEligible: false, reason: 'no_booking' });
         }
@@ -50,7 +49,6 @@ exports.checkReviewEligibility = async (req, res) => {
         res.status(500).json({ msg: 'Server error while checking eligibility' });
     }
 };
-
 // @desc    Get all movies (with filtering and sorting)
 // @route   GET /api/movies?status=now_showing&genre=Action&language=English&sort=rating_desc&limit=10&page=1
 // @access  Public
