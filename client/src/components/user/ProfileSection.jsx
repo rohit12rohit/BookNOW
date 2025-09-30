@@ -48,8 +48,8 @@ const ProfileSection = () => {
                 </Grid>
             </Grid>
             <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
-                <Button component={RouterLink} to="/profile/edit" variant="contained" disabled>
-                    Edit Profile (Coming Soon)
+                <Button component={RouterLink} to="/profile/edit" variant="contained">
+                    Edit Profile
                 </Button>
             </Box>
         </Paper>

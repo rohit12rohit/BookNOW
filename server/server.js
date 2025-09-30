@@ -52,6 +52,7 @@ app.get('/', (req, res) => {
 
 // Mount Routers for different features
 app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/users', require('./routes/userRoutes')); // <-- ADD THIS LINE
 app.use('/api/movies', require('./routes/movieRoutes'));
 app.use('/api/venues', require('./routes/venueRoutes'));
 app.use('/api/showtimes', require('./routes/showtimeRoutes'));

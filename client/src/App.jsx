@@ -25,7 +25,7 @@ const MovieDetailsPage = lazy(() => import('./pages/MovieDetailsPage'));
 const EventDetailsPage = lazy(() => import('./pages/EventDetailsPage'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const BookingConfirmationPage = lazy(() => import('./pages/BookingConfirmationPage'));
-const UserDashboardPage = lazy(() => import('./pages/UserDashboardPage')); // NEW
+const UserDashboardPage = lazy(() => import('./pages/UserDashboardPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage'));
@@ -41,10 +41,8 @@ const OrganizerEventFormPage = lazy(() => import('./pages/organizer/OrganizerEve
 // Admin-specific pages
 const UserDetailsPage = lazy(() => import('./pages/admin/UserDetailsPage'));
 
-// Placeholder for UserProfilePage
-const UserProfilePage = lazy(() => {
-    return Promise.resolve({ default: () => <Box p={3} textAlign="center"><Typography>User Profile Page (Coming Soon)</Typography></Box> });
-});
+// User-specific pages (New)
+const UserProfileEditPage = lazy(() => import('./pages/UserProfileEditPage'));
 
 // Fallback UI for Suspense
 const PageLoader = () => (
@@ -107,8 +105,8 @@ function App() {
                   element={ <ProtectedRoute> <BookingConfirmationPage /> </ProtectedRoute> }
               />
               <Route
-                  path="/profile"
-                  element={ <ProtectedRoute> <UserProfilePage /> </ProtectedRoute> }
+                  path="/profile/edit"
+                  element={ <ProtectedRoute> <UserProfileEditPage /> </ProtectedRoute> }
               />
                <Route
                   path="/movies/:movieId/review"

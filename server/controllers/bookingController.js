@@ -141,6 +141,14 @@ exports.createBooking = async (req, res) => {
         if (session.inTransaction()) {
             await session.abortTransaction();
         }
+        // *** THIS IS THE FIX ***
+        // Check for MongoDB's write conflict error code (112)
+        if (err.code === 112) {
+            console.error('[createBooking] Write Conflict Error:', err);
+            return res.status(409).json({ msg: 'These seats were just booked by another user. Please select different seats and try again.' });
+        }
+        // *** END OF FIX ***
+
         console.error('[createBooking] Error:', err);
         res.status(err.status || 500).json({ msg: err.message || 'Server error during booking.', errors: err.errors });
     } finally {
