@@ -22,10 +22,13 @@ exports.checkReviewEligibility = async (req, res) => {
             return res.status(200).json({ isEligible: false, reason: 'already_reviewed' });
         }
 
-        // 2. Check if the user has a confirmed or checked-in booking for this movie for a showtime that has passed.
-        const showtimeIds = await Showtime.find({ movie: movieId, startTime: { $lt: new Date() } }).distinct('_id');
+        // 2. **FIXED LOGIC**: Check if the user has a 'Confirmed' or 'CheckedIn' booking for ANY showtime of this movie (past or future).
+        // The original logic incorrectly only checked for past showtimes.
+        const showtimeIds = await Showtime.find({ movie: movieId }).distinct('_id');
+
+        // If there are no showtimes at all for this movie, they can't have a booking.
         if (showtimeIds.length === 0) {
-            return res.status(200).json({ isEligible: false, reason: 'no_showtimes' });
+            return res.status(200).json({ isEligible: false, reason: 'no_booking' });
         }
 
         const userBooking = await Booking.findOne({
