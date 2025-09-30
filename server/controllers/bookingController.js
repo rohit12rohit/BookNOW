@@ -186,7 +186,6 @@ exports.getBookingById = async (req, res) => {
             ? { $or: [{ _id: bookingIdentifier }, { bookingRefId: bookingIdentifier.toUpperCase() }] }
             : { bookingRefId: bookingIdentifier.toUpperCase() };
         
-        // *** CRITICAL FIX: Added 'qrCodeData' to the select statement ***
         const booking = await Booking.findOne(query)
              .select('+qrCodeData') // Explicitly select the qrCodeData field
              .populate({

@@ -1,9 +1,11 @@
 // client/src/pages/BookingConfirmationPage.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
 import { getBookingByIdApi } from '../api/bookings';
 import { useAuth } from '../contexts/AuthContext';
 import dayjs from 'dayjs';
+import { PDFDownloadLink } from '@react-pdf/renderer';
+
 // MUI Components
 import Container from '@mui/material/Container';
 import Typography from '@mui/material/Typography';
@@ -14,18 +16,22 @@ import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'; // Icon for failed/pending status
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import DownloadIcon from '@mui/icons-material/Download';
 
-// Import QR Code Component
-import { QRCodeSVG } from 'qrcode.react';
+// Import QR Code and Ticket Components
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import TicketDocument from '../components/TicketDocument';
 
 const BookingConfirmationPage = () => {
-    const { bookingId } = useParams(); // This will be the bookingRefId or mongo _id
+    const { bookingId } = useParams();
     const { user, isLoading: isAuthLoading } = useAuth();
     const [booking, setBooking] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
     const [qrCodeValue, setQrCodeValue] = useState('');
+    const [qrCodeDataURL, setQrCodeDataURL] = useState('');
+    const qrCanvasRef = useRef(null);
 
     useEffect(() => {
         let isMounted = true;
@@ -43,9 +49,8 @@ const BookingConfirmationPage = () => {
                         setBooking(null);
                     } else {
                         setBooking(data);
-                        // Use the detailed qrCodeData field for the QR code value
                         if (data && (data.status === 'Confirmed' || data.status === 'CheckedIn')) {
-                            setQrCodeValue(data.qrCodeData || ''); // Use the JSON string from the backend
+                            setQrCodeValue(data.qrCodeData || '');
                         }
                     }
                 }
@@ -60,11 +65,22 @@ const BookingConfirmationPage = () => {
         return () => { isMounted = false; };
     }, [bookingId, user, isAuthLoading]);
 
+    // Effect to generate QR code data URL from canvas for PDF
+    useEffect(() => {
+        if (qrCodeValue && qrCanvasRef.current) {
+            const canvas = qrCanvasRef.current;
+            // A short delay ensures canvas has time to render before we grab the data URL
+            setTimeout(() => {
+                const dataUrl = canvas.toDataURL('image/png');
+                setQrCodeDataURL(dataUrl);
+            }, 100);
+        }
+    }, [qrCodeValue]);
+
     if (isLoading || isAuthLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}><CircularProgress color="error" /></Box>;
     if (error) return <Container sx={{ py: 4 }}><Alert severity="error">{error}</Alert></Container>;
     if (!booking) return <Container sx={{ py: 4 }}><Alert severity="warning">Booking details could not be loaded.</Alert></Container>;
 
-    // --- Conditional Rendering Logic ---
     const isConfirmed = booking.status === 'Confirmed' || booking.status === 'CheckedIn';
 
     const show = booking.showtime;
@@ -122,13 +138,20 @@ const BookingConfirmationPage = () => {
                          <Box sx={{ p: 1, bgcolor: 'white', border: '1px solid grey' }}>
                             <QRCodeSVG
                                 value={qrCodeValue}
-                                size={220} // Slightly larger for more data
+                                size={220}
                                 level={"H"}
                             />
                          </Box>
                          <Typography variant="caption" color="text.secondary" sx={{mt: 1}}>
                              Show this at the venue entrance for check-in.
                          </Typography>
+                         {/* Hidden canvas for generating PDF image data */}
+                         <QRCodeCanvas
+                            ref={qrCanvasRef}
+                            value={qrCodeValue}
+                            size={256}
+                            style={{ display: 'none' }}
+                        />
                     </Box>
                 )}
 
@@ -140,7 +163,29 @@ const BookingConfirmationPage = () => {
                     </Alert>
                 )}
 
-                <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
+                    {isConfirmed && qrCodeDataURL ? (
+                        <PDFDownloadLink
+                            document={<TicketDocument booking={booking} qrCodeDataURL={qrCodeDataURL} />}
+                            fileName={`BookNOW_Ticket_${displayBookingRefId}.pdf`}
+                            style={{ textDecoration: 'none' }}
+                        >
+                            {({ loading }) => (
+                                <Button
+                                    variant="contained"
+                                    color="secondary"
+                                    startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <DownloadIcon />}
+                                >
+                                    {loading ? 'Generating...' : 'Download Ticket'}
+                                </Button>
+                            )}
+                        </PDFDownloadLink>
+                    ) : isConfirmed ? (
+                        <Button variant="contained" color="secondary" disabled>
+                            <CircularProgress size={20} color="inherit" />
+                        </Button>
+                    ) : null}
+
                     <Button component={RouterLink} to="/dashboard?tab=bookings" variant="contained" color="error"> View My Bookings </Button>
                      <Button component={RouterLink} to="/" variant="outlined" color="error"> Back to Home </Button>
                 </Box>

@@ -430,6 +430,7 @@ exports.getBookingByIdAdmin = async (req, res) => {
 
     try {
         const booking = await Booking.findById(bookingId)
+            .select('+qrCodeData') // *** THIS IS THE FIX ***
             .populate('user', 'name email role')
             .populate({
                 path: 'showtime',
