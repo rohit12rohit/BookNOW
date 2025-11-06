@@ -54,7 +54,7 @@ const ForgotPasswordPage = () => {
                     Forgot Password
                 </Typography>
                 <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 2 }}>
-                    Enter your email address and we'll send you a link to reset your password (check server console/Mailtrap for the link during testing).
+                    Enter your email address and we'll send you a link to reset your password.
                 </Typography>
                 <Box component="form" onSubmit={handleSubmit} noValidate sx={{ mt: 1, width: '100%' }}>
                     {error && <Alert severity="error" sx={{ mb: 2, width: '100%' }}>{error}</Alert>}
