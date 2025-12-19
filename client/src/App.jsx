@@ -94,8 +94,7 @@ function App() {
               <Route path="/events/:eventId" element={<EventDetailsPage />} />
               <Route path="/search" element={<SearchResultsPage />} />
               <Route path="/book/:showtimeId" element={<BookingPage />} />
-              <Route path="/google-auth-success" element={<GoogleAuthSuccessPage />} />
-              
+
               {/* --- Protected Routes (Require Basic Login) --- */}
               <Route
                   path="/dashboard"

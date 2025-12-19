@@ -1,35 +1,50 @@
 // client/src/pages/GoogleAuthSuccessPage.jsx
-import React, { useEffect, useContext } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AuthContext } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Typography from '@mui/material/Typography';
 
 const GoogleAuthSuccessPage = () => {
     const [searchParams] = useSearchParams();
-    const { login } = useContext(AuthContext);
+    const { loadUser } = useAuth(); // We use loadUser to fetch profile immediately
     const navigate = useNavigate();
 
     useEffect(() => {
         const token = searchParams.get('token');
         if (token) {
-            // Decode token to get role (optional, or just pass generic role until profile fetch)
-            // For simplicity, we just save token. AuthContext usually fetches profile after.
-            login(token, 'user'); // Defaulting role, Context will update on fetchMe
+            // 1. Save token
+            localStorage.setItem('authToken', token);
             
-            // Redirect after short delay to show the "Success" screen
+            // 2. Trigger user load
+            loadUser(token);
+
+            // 3. Redirect to home or dashboard after a brief delay
             setTimeout(() => {
-                navigate('/dashboard');
-            }, 1500);
+                navigate('/');
+            }, 1000);
         } else {
+            // No token found, go back to login
             navigate('/login');
         }
-    }, [searchParams, login, navigate]);
+    }, [searchParams, loadUser, navigate]);
 
     return (
-        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <h2>Google Login Successful!</h2>
-            <p>Redirecting you to the dashboard...</p>
-            <div className="spinner"></div> 
-        </div>
+        <Box sx={{ 
+            height: '100vh', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            gap: 2 
+        }}>
+            <CircularProgress size={60} color="primary" />
+            <Typography variant="h5">Logging you in...</Typography>
+            <Typography variant="body2" color="text.secondary">
+                Please wait while we verify your Google account.
+            </Typography>
+        </Box>
     );
 };
 
