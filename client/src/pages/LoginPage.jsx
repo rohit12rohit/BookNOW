@@ -1,102 +1,138 @@
-// File: /client/src/pages/LoginPage.jsx
-import React, { useState, useEffect } from 'react'; // Added useEffect
-import { useAuth } from '../contexts/AuthContext';
-import { useNavigate, Link as RouterLink } from 'react-router-dom';
-// MUI Components
-import Container from '@mui/material/Container';
-import Box from '@mui/material/Box';
-import TextField from '@mui/material/TextField';
-import Button from '@mui/material/Button';
-import Typography from '@mui/material/Typography';
-import Alert from '@mui/material/Alert';
-import Link from '@mui/material/Link';
-import CircularProgress from '@mui/material/CircularProgress';
-import Paper from '@mui/material/Paper';
+// client/src/pages/LoginPage.jsx
+import React, { useState, useContext } from 'react';
+// IMPORT FIX: This named import now works because we exported 'AuthContext' above
+import { AuthContext } from '../contexts/AuthContext'; 
+import { useNavigate, useLocation, Link } from 'react-router-dom';
+import axios from 'axios';
+
+// Ensure this matches your backend URL
+const API_URL = 'http://localhost:5001/api/auth'; 
 
 const LoginPage = () => {
-  const [formData, setFormData] = useState({ email: '', password: '' });
-  const { login, googleLogin, isLoading, authError, setAuthError } = useAuth(); // Get error setter
-  const navigate = useNavigate();
+    const { login } = useContext(AuthContext); // Consuming the named export
+    const navigate = useNavigate();
+    const location = useLocation();
 
-  // Clear authError when component mounts or unmounts
-  useEffect(() => {
-      setAuthError(null); // Clear on mount
-      return () => {
-          setAuthError(null); // Clear on unmount
-      };
-  }, [setAuthError]);
+    // Steps: 'credentials' | 'otp'
+    const [step, setStep] = useState('credentials');
+    const [formData, setFormData] = useState({ email: '', password: '', otp: '' });
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [msg, setMsg] = useState('');
 
+    const { email, password, otp } = formData;
 
-  const handleChange = (e) => {
-    setAuthError(null); // Clear error when user types
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
+    const onChange = e => setFormData({ ...formData, [e.target.name]: e.target.value });
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setAuthError(null); // Clear previous errors before attempt
-    if (!formData.email || !formData.password) {
-        setAuthError("Please enter both email and password."); // Use authError for consistency
-        return;
-    }
+    // Step 1: Submit Credentials
+    const onCredentialSubmit = async e => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+        try {
+            const res = await axios.post(`${API_URL}/login`, { email, password });
+            if (res.data.success && res.data.step === 'otp') {
+                setMsg(res.data.msg); 
+                setStep('otp');
+            }
+        } catch (err) {
+            setError(err.response?.data?.errors?.[0]?.msg || 'Login failed');
+        } finally {
+            setLoading(false);
+        }
+    };
 
-    // The login function in context now returns true/false and handles errors internally
-    const success = await login(formData);
-    if (success) {
-        console.log("Login successful, navigating...");
-        navigate('/'); // Only navigate on true success
-    } else {
-        // Error message should already be set in authError state by the context
-        console.log("Login failed, error message should be displayed.");
-    }
-  };
+    // Step 2: Submit OTP
+    const onOtpSubmit = async e => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+        try {
+            const res = await axios.post(`${API_URL}/verify-login`, { email, otp });
+            
+            // Login successful
+            login(res.data.token, res.data.role);
+            
+            // Redirect based on role or previous location
+            const from = location.state?.from?.pathname || '/dashboard';
+            if (res.data.role === 'admin') navigate('/admin');
+            else if (res.data.role === 'organizer') navigate('/organizer');
+            else navigate(from);
 
-  return (
-    <Container component="main" maxWidth="xs" sx={{ mt: 8, mb: 4 }}>
-      <Paper elevation={3} sx={{ p: 4, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Typography component="h1" variant="h5" gutterBottom>
-          Login
-        </Typography>
-        <Box component="form" onSubmit={handleSubmit} noValidate sx={{ mt: 1, width: '100%' }}>
-          {/* Display authError from context */}
-          {authError && <Alert severity="error" sx={{ mb: 2, width: '100%' }}>{authError}</Alert>}
+        } catch (err) {
+            setError(err.response?.data?.msg || 'OTP verification failed');
+        } finally {
+            setLoading(false);
+        }
+    };
 
-          <TextField
-            margin="normal" required fullWidth id="email" label="Email Address" name="email"
-            autoComplete="email" autoFocus value={formData.email} onChange={handleChange} disabled={isLoading}
-          />
-          <TextField
-            margin="normal" required fullWidth name="password" label="Password" type="password" id="password"
-            autoComplete="current-password" value={formData.password} onChange={handleChange} disabled={isLoading}
-          />
-          <Box sx={{ textAlign: 'right', my: 1 }}>
-            <Link component={RouterLink} to="/forgot-password" variant="body2" color="error">
-               Forgot password?
-             </Link>
-           </Box>
-          <Button
-            type="submit" fullWidth variant="contained" color="error"
-            sx={{ mt: 3, mb: 2 }} disabled={isLoading}
-          >
-            {isLoading ? <CircularProgress size={24} color="inherit" /> : 'Sign In'}
-          </Button>
-          <Button
-            fullWidth
-            variant="outlined"
-            onClick={googleLogin}
-            sx={{ mb: 2 }}
-          >
-            Sign In with Google
-          </Button>
-          <Box sx={{ textAlign: 'center' }}>
-            <Link component={RouterLink} to="/register" variant="body2" color="error">
-                {"Don't have an account? Sign Up"}
-            </Link>
-          </Box>
-        </Box>
-      </Paper>
-    </Container>
-  );
+    const handleGoogleLogin = () => {
+        window.open('http://localhost:5001/api/auth/google', '_self');
+    };
+
+    return (
+        <div className="auth-container">
+            <div className="auth-card">
+                <h2>{step === 'credentials' ? 'Login' : 'Enter OTP'}</h2>
+                {error && <div className="alert error">{error}</div>}
+                {msg && <div className="alert success">{msg}</div>}
+
+                {step === 'credentials' ? (
+                    <form onSubmit={onCredentialSubmit}>
+                        <div className="form-group">
+                            <label>Email Address</label>
+                            <input type="email" name="email" value={email} onChange={onChange} required />
+                        </div>
+                        <div className="form-group">
+                            <label>Password</label>
+                            <input type="password" name="password" value={password} onChange={onChange} required />
+                        </div>
+                        <button type="submit" className="btn-primary block" disabled={loading}>
+                            {loading ? 'Processing...' : 'Login'}
+                        </button>
+                    </form>
+                ) : (
+                    <form onSubmit={onOtpSubmit}>
+                        <div className="form-group">
+                            <label>One-Time Password (OTP)</label>
+                            <input 
+                                type="text" 
+                                name="otp" 
+                                value={otp} 
+                                onChange={onChange} 
+                                placeholder="Enter 6-digit OTP"
+                                maxLength="6"
+                                required 
+                            />
+                        </div>
+                        <button type="submit" className="btn-primary block" disabled={loading}>
+                            {loading ? 'Verify & Login' : 'Verify'}
+                        </button>
+                        <p className="text-center mt-2">
+                            <button type="button" className="btn-text" onClick={() => setStep('credentials')}>
+                                Back to Login
+                            </button>
+                        </p>
+                    </form>
+                )}
+
+                {step === 'credentials' && (
+                    <>
+                        <div className="divider"><span>OR</span></div>
+                        <button onClick={handleGoogleLogin} className="btn-google block">
+                            Continue with Google
+                        </button>
+                        <p className="auth-footer">
+                            Don't have an account? <Link to="/register">Register</Link>
+                        </p>
+                        <p className="auth-footer">
+                            <Link to="/forgotpassword">Forgot Password?</Link>
+                        </p>
+                    </>
+                )}
+            </div>
+        </div>
+    );
 };
 
 export default LoginPage;
