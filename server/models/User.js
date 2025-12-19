@@ -3,7 +3,7 @@
 
 const crypto = require('crypto');
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs'); // Needed here if using pre-save hook, but we'll hash in controller
+const bcrypt = require('bcryptjs');
 
 const UserSchema = new mongoose.Schema({
     name: {
@@ -13,8 +13,8 @@ const UserSchema = new mongoose.Schema({
     email: {
         type: String,
         required: [true, 'Please provide an email'],
-        unique: true, // Ensure email addresses are unique
-        match: [ // Basic email format validation
+        unique: true,
+        match: [
             /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
             'Please provide a valid email'
         ]
@@ -30,65 +30,65 @@ const UserSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ['user', 'organizer', 'admin'], // Allowed roles
-        default: 'user' // Default role for new signups
+        enum: ['user', 'organizer', 'admin'],
+        default: 'user'
     },
-    // --- Organizer Specific Fields (Populated only if role is 'organizer') ---
+    // --- Organizer Specific Fields ---
     organizationName: {
         type: String,
     },
-    managedVenues: [{ // Array of Venue ObjectIDs managed by this organizer
+    managedVenues: [{
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Venue' // Reference to the 'Venue' model (we'll create later)
+        ref: 'Venue'
     }],
-    isApproved: { // Flag for admin approval of organizer accounts
+    isApproved: {
         type: Boolean,
         default: false
     },
-    // --- End Organizer Specific Fields ---
-    createdAt: { // Timestamp for when the user was created
+    createdAt: {
         type: Date,
         default: Date.now
     },
-    // Optional: Add fields for password reset later if needed
-    resetPasswordToken: String,   // Stores the HASHED version of the reset token
+    resetPasswordToken: String,
     resetPasswordExpire: Date
 });
 
-/* // Example: Pre-save hook to hash password (Alternative to hashing in controller)
+// --- Pre-save hook to hash password ---
 UserSchema.pre('save', async function(next) {
     // Only run this function if password was actually modified
     if (!this.isModified('password')) {
-        next();
+        return next();
     }
-    // Hash the password with cost of 10
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-}); 
+    try {
+        // Hash the password with cost of 10
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    } catch (err) {
+        next(err);
+    }
+});
 
-/* // Example: Instance method to compare entered password with hashed password
+// --- Instance method to compare entered password with hashed password ---
 UserSchema.methods.matchPassword = async function(enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
-}; */
+};
 
-// --- NEW: Method to generate and hash password reset token ---
-// (Add this method to the UserSchema)
+// --- Method to generate and hash password reset token ---
 UserSchema.methods.getResetPasswordToken = function() {
     // 1. Generate Token (Plain text token)
     const resetToken = crypto.randomBytes(20).toString('hex');
 
     // 2. Hash Token and set to resetPasswordToken field
-    // We store the HASH in the DB, not the plain token
     this.resetPasswordToken = crypto
         .createHash('sha256')
         .update(resetToken)
         .digest('hex');
 
-    // 3. Set expire time (e.g., 10 minutes from now)
-    this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes in milliseconds
+    // 3. Set expire time (10 minutes from now)
+    this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
 
-    // 4. Return the PLAIN text token (to be sent via email)
+    // 4. Return the PLAIN text token
     return resetToken;
 };
 

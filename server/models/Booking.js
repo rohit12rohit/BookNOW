@@ -7,43 +7,60 @@ const BookingSchema = new mongoose.Schema({
     bookingRefId: {
         type: String,
         required: true,
-        unique: true, // Ensure uniqueness
-        index: true,  // Index for faster lookup by ref ID
-        maxlength: 10 // Optional: Set max length if needed
+        unique: true, 
+        index: true,  
+        maxlength: 20 
     },
-    user: { // The user who made the booking
+    user: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true,
         index: true
     },
-    showtime: { // The specific showtime booked
+    showtime: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Showtime',
         required: true,
         index: true
     },
-    seats: [{ // Array of seat identifiers booked (e.g., "A1", "C5")
-        type: String,
-        required: [true, 'At least one seat must be selected']
-    }],
-    totalAmount: { // Final amount after discount
+    seats: {
+        type: [String], // e.g., ["A1", "C5"]
+        required: [true, 'At least one seat must be selected'],
+        validate: [
+            {
+                validator: function(seats) {
+                    return seats.length > 0;
+                },
+                message: 'At least one seat must be selected.'
+            },
+            {
+                validator: function(seats) {
+                    // Prevent duplicates in the SAME booking request
+                    return new Set(seats).size === seats.length;
+                },
+                message: 'Duplicate seats detected in booking.'
+            }
+        ]
+    },
+    totalAmount: { 
         type: Number,
         required: true,
         min: 0
     },
-    originalAmount: { // Store amount *before* discount for reference
+    originalAmount: { 
         type: Number,
+        min: 0
     },
-    promoCodeApplied: { // Reference the PromoCode document
+    promoCodeApplied: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PromoCode',
     },
-    discountAmount: { // Store the actual discount value applied
+    discountAmount: { 
         type: Number,
-        default: 0
+        default: 0,
+        min: 0
     },
-    status: { // Status of the booking
+    status: { 
         type: String,
         enum: ['PaymentPending', 'Confirmed', 'Cancelled', 'CheckedIn', 'PaymentFailed'],
         default: 'PaymentPending'
@@ -52,12 +69,10 @@ const BookingSchema = new mongoose.Schema({
     razorpayOrderId: { type: String },
     razorpayPaymentId: { type: String },
     razorpaySignature: { type: String },
-    bookingTime: { // Timestamp when the booking was made
+    
+    bookingTime: { 
         type: Date,
         default: Date.now
-    },
-    paymentId: {
-        type: String,
     },
     isCheckedIn: {
         type: Boolean,
@@ -66,20 +81,20 @@ const BookingSchema = new mongoose.Schema({
     checkInTime: {
         type: Date
     },
-    checkedInBy: { // Admin/Organizer who scanned the QR code
+    checkedInBy: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
-    qrCodeData: { // Field to store the detailed QR code string
+    qrCodeData: { 
         type: String,
     }
 });
 
-// Index for finding user's bookings easily
+// Index for finding user's bookings (Most common query)
 BookingSchema.index({ user: 1, bookingTime: -1 });
-// Index for finding booking by payment identifiers
+
+// Indexes for Payment Reconciliation
 BookingSchema.index({ razorpayOrderId: 1 });
 BookingSchema.index({ razorpayPaymentId: 1 });
 
-
-module.exports = mongoose.model('Booking', BookingSchema);
+module.exports = mongoose.models.Booking || mongoose.model('Booking', BookingSchema);

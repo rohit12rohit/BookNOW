@@ -9,6 +9,33 @@ const { validationResult } = require('express-validator');
 const mongoose = require('mongoose');
 
 
+// --- Helper: Recalculate Movie Rating ---
+const calculateAverageRating = async (movieId) => {
+    const stats = await Review.aggregate([
+        { $match: { movie: movieId } },
+        {
+            $group: {
+                _id: '$movie',
+                averageRating: { $avg: '$rating' },
+                numberOfReviews: { $sum: 1 }
+            }
+        }
+    ]);
+
+    if (stats.length > 0) {
+        await Movie.findByIdAndUpdate(movieId, {
+            averageRating: stats[0].averageRating.toFixed(1), // Round to 1 decimal
+            numberOfReviews: stats[0].numberOfReviews
+        });
+    } else {
+        await Movie.findByIdAndUpdate(movieId, {
+            averageRating: 0,
+            numberOfReviews: 0
+        });
+    }
+};
+
+
 // @desc    Get all reviews for a specific movie
 // @route   GET /api/movies/:movieId/reviews
 // @access  Public

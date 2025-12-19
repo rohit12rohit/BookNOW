@@ -15,29 +15,34 @@ passport.deserializeUser((id, done) => {
 
 passport.use(
     new GoogleStrategy({
-        // options for google strategy
         clientID: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        callbackURL: '/api/auth/google/callback'
-    }, (accessToken, refreshToken, profile, done) => {
-        // check if user already exists in our db
-        User.findOne({googleId: profile.id}).then((currentUser) => {
-            if(currentUser){
-                // already have the user
-                console.log('user is: ', currentUser);
-                done(null, currentUser);
-            } else {
-                // if not, create user in our db
-                new User({
-                    name: profile.displayName,
-                    email: profile.emails[0].value,
-                    googleId: profile.id,
-                    isApproved: true,
-                }).save().then((newUser) => {
-                    console.log('new user created: ' + newUser);
-                    done(null, newUser);
-                });
-            }
-        })
+        // Use absolute URL to prevent issues with proxies/production environments
+        callbackURL: `${process.env.SERVER_URL || 'http://localhost:5001'}/api/auth/google/callback`
+    }, async (accessToken, refreshToken, profile, done) => {
+        try {
+            // Check if user already exists
+            const currentUser = await User.findOne({ googleId: profile.id });
+            
+            if (currentUser) {
+                // User exists
+                return done(null, currentUser);
+            } 
+            
+            // If not, create new user
+            const newUser = await new User({
+                name: profile.displayName,
+                email: profile.emails[0].value,
+                googleId: profile.id,
+                isApproved: true, // Auto-approve generic Google users?
+            }).save();
+            
+            console.log(`New Google user created: ${newUser.email}`);
+            done(null, newUser);
+            
+        } catch (err) {
+            console.error('Passport Google Strategy Error:', err);
+            done(err, null);
+        }
     })
 );

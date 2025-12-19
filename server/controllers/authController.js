@@ -3,92 +3,126 @@
 
 // --- Required Modules ---
 const User = require('../models/User');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); // For password reset token
+const crypto = require('crypto');
 const { validationResult } = require('express-validator');
-const sendEmail = require('../utils/sendEmail'); // For sending emails
+const sendEmail = require('../utils/sendEmail');
 
 // --- Helper Function to Generate JWT ---
 const generateToken = (user) => {
     const payload = {
         user: {
-            id: user.id, // User's unique MongoDB ID
-            role: user.role // User's role
+            id: user.id,
+            role: user.role
         }
     };
-    // Sign token with secret from .env and set expiration
     return jwt.sign(
         payload,
         process.env.JWT_SECRET,
-        { expiresIn: '5h' } // Example: 5-hour expiration
+        { expiresIn: process.env.JWT_EXPIRE || '5h' }
     );
 };
-
 
 // --- Register User Controller ---
 exports.registerUser = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
     const { name, email, password, role, organizationName } = req.body;
+
     try {
         let user = await User.findOne({ email: email.toLowerCase() });
-        if (user) return res.status(400).json({ errors: [{ msg: 'User with this email already exists' }] });
+        if (user) {
+            return res.status(400).json({ errors: [{ msg: 'User with this email already exists' }] });
+        }
+
         const finalRole = (role === 'organizer') ? 'organizer' : 'user';
-        const isApproved = (finalRole === 'user');
-        user = new User({ name, email: email.toLowerCase(), password, role: finalRole, isApproved: isApproved, organizationName: finalRole === 'organizer' ? organizationName : undefined });
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(password, salt);
-        await user.save();
+        const isApproved = (finalRole === 'user'); // Organizers need manual approval
+
+        user = new User({
+            name,
+            email: email.toLowerCase(),
+            password, // Passed as plain text; User model pre-save hook will hash it
+            role: finalRole,
+            isApproved: isApproved,
+            organizationName: finalRole === 'organizer' ? organizationName : undefined
+        });
+
+        await user.save(); // Triggers the pre-save hook in User.js
+
         const token = generateToken(user);
         res.status(201).json({ token, role: user.role, isApproved: user.isApproved });
-    } catch (err) { console.error('Registration Error:', err.message); res.status(500).json({ errors: [{ msg: 'Server error during registration' }] }); }
-};
 
+    } catch (err) {
+        console.error('Registration Error:', err.message);
+        res.status(500).json({ errors: [{ msg: 'Server error during registration' }] });
+    }
+};
 
 // --- Login User Controller ---
 exports.loginUser = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
     const { email, password } = req.body;
+
     try {
+        // Explicitly select password since it is set to select: false in schema
         const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
-        if (!user) return res.status(401).json({ errors: [{ msg: 'Invalid credentials' }] });
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(401).json({ errors: [{ msg: 'Invalid credentials' }] });
-        if (user.role === 'organizer' && !user.isApproved) return res.status(403).json({ errors: [{ msg: 'Organizer account pending approval' }] });
+        
+        if (!user) {
+            return res.status(401).json({ errors: [{ msg: 'Invalid credentials' }] });
+        }
+
+        // Use the instance method defined in User model
+        const isMatch = await user.matchPassword(password);
+        
+        if (!isMatch) {
+            return res.status(401).json({ errors: [{ msg: 'Invalid credentials' }] });
+        }
+
+        if (user.role === 'organizer' && !user.isApproved) {
+            return res.status(403).json({ errors: [{ msg: 'Organizer account pending approval' }] });
+        }
+
         const token = generateToken(user);
         res.status(200).json({ token, role: user.role });
-    } catch (err) { console.error('Login Error:', err.message); res.status(500).json({ errors: [{ msg: 'Server error during login' }] }); }
-};
 
+    } catch (err) {
+        console.error('Login Error:', err.message);
+        res.status(500).json({ errors: [{ msg: 'Server error during login' }] });
+    }
+};
 
 // --- Get Logged-in User Controller ---
 exports.getMe = async (req, res) => {
     try {
-        // req.user should be attached by authMiddleware if token is valid
         if (!req.user || !req.user.id) {
              return res.status(401).json({ msg: 'Not authorized, user context missing' });
         }
         const user = await User.findById(req.user.id).select('-password');
         if (!user) return res.status(404).json({ msg: 'User not found' });
         res.status(200).json(user);
-    } catch (err) { console.error('GetMe Error:', err.message); res.status(500).json({ msg: 'Server error fetching user profile' }); }
+    } catch (err) {
+        console.error('GetMe Error:', err.message);
+        res.status(500).json({ msg: 'Server error fetching user profile' });
+    }
 };
 
 // --- Google Auth Callback Controller ---
 exports.googleCallback = (req, res) => {
+    // Security Note: Passing token in URL is a risk. 
+    // Ideally, send a temporary code or use a cookie-based exchange.
+    // For now, ensuring HTTPS on the frontend is critical.
     const token = generateToken(req.user);
-    res.redirect(`${process.env.FRONTEND_URL}?token=${token}`);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}?token=${token}`);
 };
 
-
-// --- Forgot Password Controller (with Reset Link Logging) ---
+// --- Forgot Password Controller ---
 exports.forgotPassword = async (req, res) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { email } = req.body;
 
@@ -96,38 +130,30 @@ exports.forgotPassword = async (req, res) => {
         const user = await User.findOne({ email: email.toLowerCase() });
 
         if (!user) {
-            // Don't reveal if user exists
-            console.log(`Forgot password attempt for non-existent email: ${email}`);
-            return res.status(200).json({ success: true, data: 'Password reset email has been dispatched if an account with that email exists.' });
+            // Return success even if user not found to prevent email enumeration
+            return res.status(200).json({ success: true, data: 'If an account exists, a reset email has been sent.' });
         }
 
-        // Ensure the user model instance has the method defined
-        if (typeof user.getResetPasswordToken !== 'function') {
-             console.error(`FATAL ERROR: user.getResetPasswordToken is not a function on User model instance for ${user.email}`);
-             return res.status(500).json({ msg: 'Server configuration error [FP01].'});
-        }
-
-        const resetToken = user.getResetPasswordToken(); // Generate plain token
-        await user.save({ validateBeforeSave: false }); // Save hashed token & expiry to DB
+        // Generate plain token (hashing happens in the method)
+        const resetToken = user.getResetPasswordToken();
+        
+        // Save user to store the hashed token and expiry
+        await user.save({ validateBeforeSave: false });
 
         // Construct the full reset URL
-        const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/resetpassword/${resetToken}`;
-
-        // --- ADDED LOG FOR TESTING ---
-        console.log('--------------------------------------------------');
-        console.log('--- PASSWORD RESET LINK (FOR DEV/TESTING ONLY) ---');
-        console.log(`--- User Email: ${user.email}`);
-        console.log(`--- Token (Plain): ${resetToken}`);
-        console.log(`--- Full URL: ${resetUrl}`); // <<< THIS IS THE ADDED LOG
-        console.log('--------------------------------------------------');
-        // --- END ADDED LOG ---
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const resetUrl = `${frontendUrl}/resetpassword/${resetToken}`;
 
         // Construct email message
-        const message = `<h2>Password Reset Request</h2><p>You requested a password reset for your BookNOW account associated with ${user.email}.</p><p>Please click on the following link, or paste it into your browser to complete the process within 10 minutes:</p><p><a href="${resetUrl}" target="_blank">${resetUrl}</a></p><p>If you did not request this, please ignore this email and your password will remain unchanged.</p><hr><p>Thank you,<br>The BookNOW Team</p>`;
+        const message = `
+            <h2>Password Reset Request</h2>
+            <p>You requested a password reset for your BookNOW account.</p>
+            <p>Please click on the following link to reset your password (valid for 10 minutes):</p>
+            <p><a href="${resetUrl}" target="_blank">${resetUrl}</a></p>
+            <p>If you did not request this, please ignore this email.</p>
+        `;
 
-        // Attempt to send the actual email
         try {
-            console.log(`Attempting to send password reset email to ${user.email}...`);
             await sendEmail({
                 to: user.email,
                 subject: 'BookNOW - Password Reset Request',
@@ -135,11 +161,10 @@ exports.forgotPassword = async (req, res) => {
                 text: `Please use this link to reset your password: ${resetUrl}`
             });
 
-            res.status(200).json({ success: true, data: 'Password reset email dispatched successfully.' });
+            res.status(200).json({ success: true, data: 'Email sent' });
 
         } catch (emailError) {
-            console.error('Email sending error during forgot password:', emailError);
-            // Clear token fields if email fails so user can retry
+            console.error('Email sending error:', emailError);
             user.resetPasswordToken = undefined;
             user.resetPasswordExpire = undefined;
             await user.save({ validateBeforeSave: false });
@@ -147,62 +172,46 @@ exports.forgotPassword = async (req, res) => {
         }
 
     } catch (err) {
-        console.error('Forgot Password Error (Outside Email):', err.message);
+        console.error('Forgot Password Error:', err.message);
         res.status(500).json({ msg: 'Server error processing request' });
     }
 };
-
 
 // --- Reset Password Controller ---
 exports.resetPassword = async (req, res) => {
      const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    // Hash the incoming plain token from URL param to match stored hash
-    let resetPasswordToken;
     try {
-        resetPasswordToken = crypto
+        // Hash the incoming plain token to compare with storage
+        const resetPasswordToken = crypto
             .createHash('sha256')
-            .update(req.params.resettoken) // Get plain token from URL param
+            .update(req.params.resettoken)
             .digest('hex');
-    } catch (hashError) {
-         console.error("Error hashing reset token:", hashError);
-         return res.status(400).json({ msg: 'Invalid token format.' });
-    }
 
-
-    try {
-        // Find user by the HASHED token & check expiry
         const user = await User.findOne({
             resetPasswordToken,
-            resetPasswordExpire: { $gt: Date.now() } // Token is valid and not expired
+            resetPasswordExpire: { $gt: Date.now() }
         });
 
         if (!user) {
             return res.status(400).json({ msg: 'Invalid or expired reset token' });
         }
 
-        // Set new password from request body
+        // Set new password (plain text)
         user.password = req.body.password;
 
-        // Clear the reset token fields
+        // Clear reset fields
         user.resetPasswordToken = undefined;
         user.resetPasswordExpire = undefined;
 
-        // Hash the new password before saving
-         const salt = await bcrypt.genSalt(10);
-         user.password = await bcrypt.hash(user.password, salt);
-
-        // Save user with new password
-        await user.save(); // Runs validation (e.g., password length)
+        // Save: This triggers the pre-save hook in User.js which HASHES the password
+        await user.save(); 
 
         res.status(200).json({ success: true, msg: 'Password reset successful' });
 
     } catch (err) {
          console.error('Reset Password Error:', err.message);
-         if (err.name === 'ValidationError') {
-             return res.status(400).json({ msg: `Validation failed: ${err.message}` });
-         }
          res.status(500).json({ msg: 'Server error' });
     }
 };

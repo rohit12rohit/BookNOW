@@ -7,8 +7,8 @@ const MovieSchema = new mongoose.Schema({
     title: {
         type: String,
         required: [true, 'Please add a movie title'],
-        trim: true, // Remove whitespace
-        unique: true // Assuming movie titles should be unique
+        trim: true, 
+        unique: true
     },
     description: {
         type: String,
@@ -20,56 +20,68 @@ const MovieSchema = new mongoose.Schema({
     },
     duration: {
         type: Number, // Duration in minutes
-        required: [true, 'Please add the duration in minutes']
+        required: [true, 'Please add the duration in minutes'],
+        min: [1, 'Duration must be at least 1 minute']
     },
     movieLanguage: {
         type: String,
         required: [true, 'Please add the language'],
         trim: true
     },
-    genre: [{ // Allow multiple genres
+    genre: [{ 
         type: String,
         required: [true, 'Please add at least one genre'],
         trim: true
     }],
-    cast: [{ // Array of actor names
+    cast: [{ 
         type: String,
         trim: true
     }],
-    crew: [{ // Array of key crew members (e.g., "Director: Name", "Music: Name")
+    crew: [{ 
         type: String,
         trim: true
     }],
-    posterUrl: { // URL to the movie poster image
+    posterUrl: { 
         type: String,
-        match: [/^(http|https):\/\/[^ "]+$/, 'Please use a valid URL for poster']
-        // required: true // Consider if poster is mandatory
+        validate: {
+            validator: function(v) {
+                if (!v) return true;
+                return /^(https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i.test(v);
+            },
+            message: 'Please use a valid URL for poster'
+        }
     },
-    trailerUrl: { // URL to the movie trailer (e.g., YouTube link)
+    trailerUrl: { 
         type: String,
-        match: [/^(http|https):\/\/[^ "]+$/, 'Please use a valid URL for trailer']
+        validate: {
+            validator: function(v) {
+                if (!v) return true;
+                return /^(https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i.test(v);
+            },
+            message: 'Please use a valid URL for trailer'
+        }
     },
     censorRating: {
-        type: String, // e.g., 'U', 'U/A', 'A'
-        trim: true
-    },
-    format: [{ // Available formats like 2D, 3D, IMAX
         type: String,
         trim: true,
-        // enum: ['2D', '3D', 'IMAX', '4DX'] // Optional: restrict to specific formats
+        uppercase: true // e.g., 'U/A'
+    },
+    format: [{ 
+        type: String,
+        trim: true,
+        uppercase: true // Force '2D', '3D', 'IMAX' consistency
     }],
     averageRating: {
         type: Number,
         min: 0,
-        max: 5, // Match the ReviewSchema rating scale
+        max: 5,
         default: 0
     },
     numberOfReviews: {
         type: Number,
         default: 0
     },
-
-    addedBy: { // Track which admin/organizer added the movie
+    addedBy: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
@@ -80,14 +92,9 @@ const MovieSchema = new mongoose.Schema({
     }
 });
 
-// Optional: Index fields that are frequently queried
-MovieSchema.index({ title: 'text', description: 'text' },
-     { default_language: 'english' }
-); // Example indexing
+MovieSchema.index({ title: 'text', description: 'text' }, { default_language: 'english' });
+MovieSchema.index({ genre: 1 });
+MovieSchema.index({ movieLanguage: 1 });
+MovieSchema.index({ releaseDate: -1 });
 
-// Separate standard indexes for filtering/sorting common fields
-MovieSchema.index({ genre: 1 });      // Index the genre array elements for filtering
-MovieSchema.index({ movieLanguage: 1 });   // Index language for filtering
-MovieSchema.index({ releaseDate: -1 });// Index for sorting by release date
-MovieSchema.index({ averageRating: -1 });// Index for sorting by rating
-module.exports = mongoose.model('Movie', MovieSchema);
+module.exports = mongoose.models.Movie || mongoose.model('Movie', MovieSchema);

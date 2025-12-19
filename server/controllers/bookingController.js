@@ -1,396 +1,302 @@
 // server/controllers/bookingController.js
-// Purpose: Contains logic for handling booking-related API requests.
+// Purpose: Handles booking creation, cancellation, and retrieval.
 
 const Booking = require('../models/Booking');
 const Showtime = require('../models/Showtime');
 const User = require('../models/User');
 const PromoCode = require('../models/PromoCode');
-const Venue = require('../models/Venue');
 const { validationResult } = require('express-validator');
 const mongoose = require('mongoose');
-const sendEmail = require('../utils/sendEmail');
-const dayjs = require('dayjs');
 const { customAlphabet } = require('nanoid');
 
-// Using a more standard alphabet without easily confused characters (e.g., I, O, 0, 1)
+// Safe alphabet for IDs (no 0/O, 1/I)
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const generateBookingRefId = customAlphabet(ALPHABET, 6);
 
-// Helper to generate unique ID
+// Helper: Unique ID generation
 async function generateUniqueBookingRefId(session) {
-    let bookingRefIdGenerated;
+    let id;
     let attempts = 0;
-    const MAX_ATTEMPTS = 5;
-    while (!bookingRefIdGenerated && attempts < MAX_ATTEMPTS) {
-        const potentialId = generateBookingRefId();
-        const existing = await Booking.findOne({ bookingRefId: potentialId }, '_id', { session });
+    while (attempts < 5) {
+        const potential = generateBookingRefId();
+        const existing = await Booking.findOne({ bookingRefId: potential }).session(session);
         if (!existing) {
-            bookingRefIdGenerated = potentialId;
+            id = potential;
+            break;
         }
         attempts++;
     }
-    if (!bookingRefIdGenerated) {
-        throw new Error('Failed to generate a unique booking reference ID.');
-    }
-    return bookingRefIdGenerated;
+    if (!id) throw new Error('Failed to generate unique Booking ID');
+    return id;
 }
 
-/**
- * Creates a new booking with a 'PaymentPending' status.
- * This is the first step in the booking process before payment.
- * @route POST /api/bookings
- * @access Private (Authenticated Users)
- */
+// --- Create Booking ---
 exports.createBooking = async (req, res) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { showtimeId, seats, promoCode: promoCodeString } = req.body;
-    const userId = req.user.id;
+    const userId = req.user._id; // User attached by authMiddleware
 
-    if (!seats || !Array.isArray(seats) || seats.length === 0) {
-        return res.status(400).json({ errors: [{ msg: 'Please select at least one seat.' }] });
+    if (!seats || seats.length === 0) {
+        return res.status(400).json({ errors: [{ msg: 'Select at least one seat.' }] });
     }
 
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
 
-        const showtime = await Showtime.findById(showtimeId).populate('venue').populate('movie').populate('event').session(session);
-        if (!showtime || !showtime.isActive || !showtime.priceTiers || showtime.priceTiers.length === 0) {
+        // 1. Fetch Showtime with lock logic implied by findOneAndUpdate later
+        const showtime = await Showtime.findById(showtimeId)
+            .populate('venue movie event')
+            .session(session);
+            
+        if (!showtime || !showtime.isActive) {
             await session.abortTransaction();
-            return res.status(404).json({ msg: 'Showtime not found or is invalid.' });
-        }
-        
-        const user = await User.findById(userId).session(session);
-        if(!user) {
-            await session.abortTransaction();
-            return res.status(404).json({ msg: 'User not found.' });
+            return res.status(404).json({ msg: 'Showtime not available.' });
         }
 
+        // 2. Atomic Seat Locking
+        // We attempt to add seats to 'bookedSeats' ONLY IF they aren't already there.
         const updatedShowtime = await Showtime.findOneAndUpdate(
-            { _id: showtimeId, bookedSeats: { $not: { $elemMatch: { $in: seats } } } },
+            { 
+                _id: showtimeId, 
+                bookedSeats: { $not: { $elemMatch: { $in: seats } } } 
+            },
             { $addToSet: { bookedSeats: { $each: seats } } },
-            { new: true, session: session }
+            { new: true, session }
         );
+
         if (!updatedShowtime) {
             await session.abortTransaction();
-            return res.status(409).json({ msg: 'One or more selected seats are already booked. Please select different seats.' });
+            return res.status(409).json({ msg: 'One or more seats are already booked.' });
         }
 
-        const screenForLayout = showtime.venue.screens.id(showtime.screenId);
-        const seatTypeMap = new Map(screenForLayout.seatLayout.rows.flatMap(r => r.seats.map(s => [`${r.rowId}${s.seatNumber}`, s.type || 'Normal'])));
-        const priceMap = new Map(showtime.priceTiers.map(t => [t.seatType, t.price]));
-        const defaultPrice = priceMap.get('Normal') || 0;
-        let originalAmount = seats.reduce((total, seatId) => total + (priceMap.get(seatTypeMap.get(seatId)) ?? defaultPrice), 0);
+        // 3. Calculate Pricing
+        const screen = showtime.venue.screens.id(showtime.screenId);
+        // Map "Row+Num" -> "Type" (e.g. "A1" -> "VIP")
+        const seatTypeMap = new Map();
+        screen.seatLayout.rows.forEach(row => {
+            row.seats.forEach(seat => {
+                seatTypeMap.set(`${row.rowId}${seat.seatNumber}`, seat.type);
+            });
+        });
 
+        const priceMap = new Map(showtime.priceTiers.map(t => [t.seatType, t.price]));
+        
+        let originalAmount = 0;
+        seats.forEach(seatId => {
+            const type = seatTypeMap.get(seatId) || 'Normal';
+            const price = priceMap.get(type) || 0;
+            originalAmount += price;
+        });
+
+        // 4. Handle Promo Code
         let finalAmount = originalAmount;
         let discountAmount = 0;
-        let appliedPromoCodeDoc = null;
+        let appliedPromo = null;
+
         if (promoCodeString) {
-            const promoCodeDoc = await PromoCode.findOne({ code: promoCodeString.trim().toUpperCase(), isActive: true }).session(session);
-            if (promoCodeDoc && promoCodeDoc.isValid() && originalAmount >= promoCodeDoc.minPurchaseAmount) {
-                discountAmount = promoCodeDoc.calculateDiscount(originalAmount);
-                finalAmount = originalAmount - discountAmount;
-                appliedPromoCodeDoc = promoCodeDoc;
-                await PromoCode.updateOne({ _id: promoCodeDoc._id }, { $inc: { uses: 1 } }, { session });
-            } else if (promoCodeDoc) {
-                await session.abortTransaction();
-                return res.status(400).json({ errors: [{ msg: `Minimum purchase of Rs. ${promoCodeDoc.minPurchaseAmount} not met.` }] });
+            const code = await PromoCode.findOne({ 
+                code: promoCodeString.toUpperCase(), 
+                isActive: true 
+            }).session(session);
+
+            if (code) {
+                if (code.isValid() && originalAmount >= code.minPurchaseAmount) {
+                    discountAmount = code.calculateDiscount(originalAmount);
+                    finalAmount = Math.max(0, originalAmount - discountAmount);
+                    appliedPromo = code._id;
+                    await PromoCode.findByIdAndUpdate(code._id, { $inc: { uses: 1 } }).session(session);
+                } else {
+                    await session.abortTransaction();
+                    return res.status(400).json({ msg: `Promo code requirements not met (Min: ${code.minPurchaseAmount})` });
+                }
             } else {
-                 await session.abortTransaction();
-                return res.status(400).json({ errors: [{ msg: 'Invalid, expired, or inapplicable promo code.' }] });
+                await session.abortTransaction();
+                return res.status(400).json({ msg: 'Invalid or expired promo code.' });
             }
         }
 
         const bookingRefId = await generateUniqueBookingRefId(session);
-        
-        const qrCodeDetails = {
-            bookingRefId: bookingRefId,
-            userName: user.name,
-            userEmail: user.email,
-            itemTitle: showtime.movie?.title || showtime.event?.title,
-            venueName: showtime.venue.name,
-            screenName: showtime.screenName,
-            showtime: showtime.startTime,
-            seats: seats,
-            totalAmount: Math.max(finalAmount, 0)
-        };
 
+        // 5. Create Booking
         const newBooking = new Booking({
             bookingRefId,
             user: userId,
             showtime: showtimeId,
             seats,
             originalAmount,
-            totalAmount: Math.max(finalAmount, 0),
+            totalAmount: finalAmount,
             discountAmount,
-            promoCodeApplied: appliedPromoCodeDoc ? appliedPromoCodeDoc._id : null,
+            promoCodeApplied: appliedPromo,
             status: 'PaymentPending',
-            qrCodeData: JSON.stringify(qrCodeDetails)
+            // Simple QR data: Ref ID is usually sufficient for lookup
+            qrCodeData: JSON.stringify({ bookingRefId, seats, showtimeId }) 
         });
 
-        const booking = await newBooking.save({ session: session });
+        await newBooking.save({ session });
         await session.commitTransaction();
-        
-        res.status(201).json(booking);
+
+        res.status(201).json(newBooking);
 
     } catch (err) {
-        if (session.inTransaction()) {
-            await session.abortTransaction();
-        }
-        // *** THIS IS THE FIX ***
-        // Check for MongoDB's write conflict error code (112)
-        if (err.code === 112) {
-            console.error('[createBooking] Write Conflict Error:', err);
-            return res.status(409).json({ msg: 'These seats were just booked by another user. Please select different seats and try again.' });
-        }
-        // *** END OF FIX ***
-
-        console.error('[createBooking] Error:', err);
-        res.status(err.status || 500).json({ msg: err.message || 'Server error during booking.', errors: err.errors });
+        if (session.inTransaction()) await session.abortTransaction();
+        console.error('Create Booking Error:', err);
+        res.status(500).json({ msg: 'Booking failed due to server error.' });
     } finally {
         session.endSession();
     }
 };
 
-/**
- * Get bookings for the logged-in user
- * @route GET /api/bookings/me
- * @access Private
- */
+// --- Get My Bookings ---
 exports.getMyBookings = async (req, res) => {
-    const userId = req.user.id;
     try {
-        const bookings = await Booking.find({ user: userId })
+        const bookings = await Booking.find({ user: req.user._id })
             .populate({
                 path: 'showtime',
+                select: 'startTime screenName',
                 populate: [
-                    { path: 'movie', select: 'title posterUrl duration releaseDate' },
-                    { path: 'venue', select: 'name address' }
-                ],
-                select: 'startTime screenName'
+                    { path: 'movie', select: 'title posterUrl duration' },
+                    { path: 'venue', select: 'name address' },
+                    { path: 'event', select: 'title imageUrl' } // Handle events too
+                ]
             })
             .sort({ bookingTime: -1 });
         res.status(200).json(bookings);
     } catch (err) {
-        console.error('Error fetching user bookings:', err.message);
         res.status(500).json({ msg: 'Server error' });
     }
 };
 
-/**
- * Get a specific booking by ID for the logged-in user or admin
- * @route GET /api/bookings/:id
- * @access Private
- */
+// --- Get Booking By ID ---
 exports.getBookingById = async (req, res) => {
-    const bookingIdentifier = req.params.id;
-    const userId = req.user.id;
     try {
-        const query = mongoose.Types.ObjectId.isValid(bookingIdentifier)
-            ? { $or: [{ _id: bookingIdentifier }, { bookingRefId: bookingIdentifier.toUpperCase() }] }
-            : { bookingRefId: bookingIdentifier.toUpperCase() };
-        
+        const { id } = req.params;
+        const query = mongoose.Types.ObjectId.isValid(id) 
+            ? { _id: id } 
+            : { bookingRefId: id.toUpperCase() };
+
         const booking = await Booking.findOne(query)
-             .select('+qrCodeData') // Explicitly select the qrCodeData field
-             .populate({
+            .populate('user', 'name email')
+            .populate({
                 path: 'showtime',
                 populate: [
-                    { path: 'movie', select: 'title posterUrl duration language genre censorRating' },
-                    { path: 'venue', select: 'name address facilities' }
+                    { path: 'movie', select: 'title posterUrl' },
+                    { path: 'venue', select: 'name address facilities' },
+                    { path: 'event' }
                 ]
-            }).populate('user', 'name email');
+            });
 
-        if (!booking) {
-            return res.status(404).json({ msg: 'Booking not found' });
+        if (!booking) return res.status(404).json({ msg: 'Booking not found' });
+
+        // Access Control
+        const isOwner = booking.user._id.toString() === req.user._id.toString();
+        const isAdmin = req.user.role === 'admin';
+        
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ msg: 'Not authorized.' });
         }
 
-        if (booking.user._id.toString() !== userId && req.user.role !== 'admin') {
-             return res.status(403).json({ msg: 'User not authorized to view this booking' });
-        }
         res.status(200).json(booking);
     } catch (err) {
-        console.error('Error fetching booking by ID:', err.message);
         res.status(500).json({ msg: 'Server error' });
     }
 };
 
-/**
- * Cancel a booking (by user)
- * @route PUT /api/bookings/:id/cancel
- * @access Private
- */
+// --- Cancel Booking (User) ---
 exports.cancelBooking = async (req, res) => {
-    const bookingId = req.params.id;
-    const userId = req.user.id;
-
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-        return res.status(400).json({ msg: 'Invalid Booking ID format' });
-    }
-
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
-        const booking = await Booking.findById(bookingId).session(session);
+        const booking = await Booking.findById(req.params.id).session(session);
+
         if (!booking) {
             await session.abortTransaction();
             return res.status(404).json({ msg: 'Booking not found' });
         }
-
-        if (booking.user.toString() !== userId) {
+        if (booking.user.toString() !== req.user._id.toString()) {
             await session.abortTransaction();
-            return res.status(403).json({ msg: 'User not authorized to cancel this booking' });
+            return res.status(403).json({ msg: 'Not authorized' });
+        }
+        if (['Cancelled', 'CheckedIn'].includes(booking.status)) {
+            await session.abortTransaction();
+            return res.status(400).json({ msg: 'Cannot cancel this booking.' });
         }
 
-        if (booking.status === 'Cancelled' || booking.status === 'CheckedIn') {
-            await session.abortTransaction();
-            return res.status(400).json({ msg: `Booking is already ${booking.status} and cannot be cancelled.` });
-        }
-
+        // Fetch showtime to check time limits
         const showtime = await Showtime.findById(booking.showtime).session(session);
-        if (!showtime) {
-            await session.abortTransaction();
-            return res.status(404).json({ msg: 'Associated showtime not found.' });
-        }
-        
-        const twoHoursInMillis = 2 * 60 * 60 * 1000;
-        if (new Date(showtime.startTime).getTime() - Date.now() < twoHoursInMillis) {
-            await session.abortTransaction();
-            return res.status(400).json({ msg: 'Cannot cancel booking this close to the showtime.' });
-        }
+        const hoursLeft = (new Date(showtime.startTime) - new Date()) / (1000 * 60 * 60);
 
-        booking.status = 'Cancelled';
-        await booking.save({ session: session });
-
-        await Showtime.findByIdAndUpdate(
-            booking.showtime,
-            { $pullAll: { bookedSeats: booking.seats } },
-            { new: true, session: session }
-        );
-
-        // TODO: Handle promo code use count reversal if applicable
-        await session.commitTransaction();
-        res.status(200).json({ success: true, msg: 'Booking cancelled successfully', booking });
-    } catch (err) {
-        if (session.inTransaction()) await session.abortTransaction();
-        console.error('Error cancelling booking:', err.message);
-        res.status(500).json({ msg: `Server error: ${err.message}` });
-    } finally {
-        session.endSession();
-    }
-};
-
-/**
- * Cancels a 'PaymentPending' booking. Called when user closes payment modal.
- * @route PUT /api/bookings/:id/cancel-pending
- * @access Private (Owner of booking)
- */
-exports.cancelPendingBooking = async (req, res) => {
-    const bookingId = req.params.id;
-    const userId = req.user.id;
-    const session = await mongoose.startSession();
-    try {
-        session.startTransaction();
-        const booking = await Booking.findOne({ _id: bookingId, user: userId }).session(session);
-        if (!booking) {
+        if (hoursLeft < 2) { // Example: 2 hour cancellation policy
             await session.abortTransaction();
-            return res.status(404).json({ msg: 'Pending booking not found or you are not the owner.' });
-        }
-        if (booking.status !== 'PaymentPending') {
-            await session.abortTransaction();
-            return res.status(400).json({ msg: `Booking status is '${booking.status}', not 'PaymentPending'.` });
+            return res.status(400).json({ msg: 'Cancellation not allowed within 2 hours of showtime.' });
         }
 
         // Release seats
-        await Showtime.updateOne(
-            { _id: booking.showtime },
+        await Showtime.findByIdAndUpdate(
+            booking.showtime,
             { $pullAll: { bookedSeats: booking.seats } },
             { session }
         );
 
-        // Update booking status to 'Cancelled' or 'PaymentFailed'
-        booking.status = 'PaymentFailed';
+        booking.status = 'Cancelled';
         await booking.save({ session });
-        
         await session.commitTransaction();
-        res.status(200).json({ success: true, msg: 'Booking cancelled and seats released.' });
+
+        res.status(200).json({ msg: 'Booking cancelled successfully.' });
+
     } catch (err) {
         if (session.inTransaction()) await session.abortTransaction();
-        console.error('Error cancelling pending booking:', err);
-        res.status(500).json({ msg: 'Server error.' });
+        res.status(500).json({ msg: 'Server error' });
     } finally {
         session.endSession();
     }
 };
 
-
-/**
- * Validate a booking via QR code scan data
- * @route POST /api/scan/validate
- * @access Private (Admin or Organizer)
- */
+// --- Validate QR (Organizer/Admin) ---
 exports.validateBookingQR = async (req, res) => {
-    const { qrCodeData } = req.body; // Expect the full QR data string
-    const staffUserId = req.user.id;
+    const { qrCodeData } = req.body;
     
-    let bookingDetails;
     try {
-        bookingDetails = JSON.parse(qrCodeData);
-    } catch (e) {
-        return res.status(400).json({ msg: 'Invalid QR Code format.' });
-    }
+        const details = JSON.parse(qrCodeData);
+        if (!details.bookingRefId) throw new Error('Invalid QR Data');
 
-    if (!bookingDetails.bookingRefId) {
-        return res.status(400).json({ msg: 'QR Code is missing a booking reference ID.' });
-    }
+        const booking = await Booking.findOne({ bookingRefId: details.bookingRefId })
+            .populate({ path: 'showtime', populate: { path: 'venue' } });
 
-    try {
-        const booking = await Booking.findOne({ bookingRefId: bookingDetails.bookingRefId.toUpperCase() })
-            .populate({ path: 'showtime', populate: { path: 'venue', select: 'organizer' } });
+        if (!booking) return res.status(404).json({ msg: 'Booking not found.' });
 
-        if (!booking) {
-            return res.status(404).json({ msg: 'Booking reference not found' });
-        }
-        
-        let isAuthorized = false;
-        if (req.user.role === 'admin') {
-            isAuthorized = true;
-        } else if (req.user.role === 'organizer' && booking.showtime?.venue?.organizer) {
-            if (booking.showtime.venue.organizer.toString() === staffUserId) {
-                isAuthorized = true;
-            }
+        // Authorization: Admin OR Organizer of THAT venue
+        const isOrganizer = req.user.role === 'organizer' && 
+                            booking.showtime.venue.organizer.toString() === req.user._id.toString();
+        const isAdmin = req.user.role === 'admin';
+
+        if (!isOrganizer && !isAdmin) {
+            return res.status(403).json({ msg: 'Not authorized to scan this ticket.' });
         }
 
-        if (!isAuthorized) {
-            return res.status(403).json({ msg: 'Not authorized to validate bookings for this venue' });
-        }
         if (booking.status === 'CheckedIn') {
-            return res.status(409).json({ msg: `Booking already checked in at ${booking.checkInTime?.toLocaleString('en-IN')}` });
+            return res.status(409).json({ 
+                msg: `Already Checked In`, 
+                time: booking.checkInTime 
+            });
         }
+
         if (booking.status !== 'Confirmed') {
-            return res.status(400).json({ msg: `Booking status is '${booking.status}', cannot check in.` });
+            return res.status(400).json({ msg: 'Ticket not confirmed/paid.' });
         }
-        
-        booking.isCheckedIn = true;
-        booking.checkInTime = new Date();
-        booking.checkedInBy = staffUserId;
+
         booking.status = 'CheckedIn';
+        booking.isCheckedIn = true;
+        booking.checkInTime = Date.now();
+        booking.checkedInBy = req.user._id;
         await booking.save();
 
-        // Respond with the details from the QR code for confirmation on the scanner's screen
-        res.status(200).json({
-            success: true,
-            message: 'Check-in Successful!',
-            bookingDetails: {
-                ...bookingDetails,
-                checkInTime: booking.checkInTime.toLocaleString('en-IN')
-            }
-        });
+        res.status(200).json({ success: true, msg: 'Check-in Successful', booking });
+
     } catch (err) {
-        console.error('[validateBookingQR] Error:', err.message);
-        res.status(500).json({ msg: `Server error: ${err.message}` });
+        console.error(err);
+        res.status(400).json({ msg: 'Invalid QR Code' });
     }
 };

@@ -1,35 +1,34 @@
 // server/server.js
-// Purpose: Main entry point for the backend Express application. Sets up middleware, routes, and starts the server.
+// Purpose: Main entry point for the backend Express application.
 
-// Load environment variables from .env file right at the start
 require('dotenv').config();
 
-// Import necessary packages
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
 const passport = require('passport');
-const connectDB = require('./config/db'); // Import database connection function
-const passportSetup = require('./config/passport-setup'); // Import passport setup
+const helmet = require('helmet'); // RECOMMENDED: Install via 'npm install helmet'
+const connectDB = require('./config/db');
+require('./config/passport-setup'); // Just import to execute the setup logic
 
 // --- Initialize Express App ---
 const app = express();
-
-// --- Import Both Routers from reviewRoutes.js ---
-const { movieReviewRouter, reviewManagementRouter } = require('./routes/reviewRoutes');
-
-
-const paymentRoutes = require('./routes/paymentRoutes');
-
 
 // --- Connect to Database ---
 connectDB();
 
 // --- Core Middlewares ---
+// 1. Security Headers
+app.use(helmet()); 
+
+// 2. CORS
 app.use(cors({
+    // In production, strictly use the env var. In dev, allow localhost.
     origin: process.env.FRONTEND_URL || "http://localhost:5173",
     credentials: true
 }));
+
+// 3. Body Parsers
 app.use(express.json({ extended: false }));
 
 // --- Session and Passport Middleware ---
@@ -38,21 +37,34 @@ app.use(session({
     resave: false,
     saveUninitialized: false,
     cookie: {
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        // Secure cookies are required in production (HTTPS)
+        secure: process.env.NODE_ENV === 'production', 
+        httpOnly: true, // Prevents client-side JS from accessing the cookie
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' // Adjust based on your cross-site needs
     }
 }));
+
 app.use(passport.initialize());
 app.use(passport.session());
 
 
+// --- Import Routers ---
+const { movieReviewRouter, reviewManagementRouter } = require('./routes/reviewRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+
 // --- API Routes ---
 app.get('/', (req, res) => {
-    res.json({ message: `Welcome to BookNOW API - Current Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}` });
+    res.json({ 
+        message: `Welcome to BookNOW API`, 
+        environment: process.env.NODE_ENV,
+        timestamp: new Date().toISOString()
+    });
 });
 
-// Mount Routers for different features
+// Mount Routers
 app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/users', require('./routes/userRoutes')); // <-- ADD THIS LINE
+app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/movies', require('./routes/movieRoutes'));
 app.use('/api/venues', require('./routes/venueRoutes'));
 app.use('/api/showtimes', require('./routes/showtimeRoutes'));
@@ -64,21 +76,38 @@ app.use('/api/events', require('./routes/eventRoutes'));
 app.use('/api/search', require('./routes/searchRoutes'));
 app.use('/api/cities', require('./routes/cityRoutes'));
 
-// --- Mount Review Routers Correctly ---
+// Nested & Special Routers
 app.use('/api/reviews', reviewManagementRouter);
-app.use('/api/movies/:movieId/reviews', movieReviewRouter); // This nested route is correct here
+app.use('/api/movies/:movieId/reviews', movieReviewRouter);
 app.use('/api/payments', paymentRoutes);
-// --- Define Port and Start Server ---
-const PORT = process.env.PORT || 5001;
 
-// app.listen(PORT, () => {
-//     console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-// });
+// --- Global Error Handler (Must be last) ---
+app.use((err, req, res, next) => {
+    console.error('[Global Error Handler]:', err.stack);
+    
+    // Hide stack trace in production
+    const response = {
+        success: false,
+        msg: err.message || 'Internal Server Error'
+    };
+    
+    if (process.env.NODE_ENV !== 'production') {
+        response.stack = err.stack;
+    }
+
+    res.status(err.status || 500).json(response);
+});
+
+// --- Start Server ---
+const PORT = process.env.PORT || 5001;
 
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => {
         console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
     });
+} else {
+    // In production, let the process manager (like PM2) handle logging or just start silently
+    app.listen(PORT);
 }
 
 module.exports = app;
